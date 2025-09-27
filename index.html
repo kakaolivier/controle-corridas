@@ -8,8 +8,9 @@
     <!-- Link para o Web Manifest (Obrigatório para PWA) -->
     <link rel="manifest" href="/manifest.json">
     
-    <!-- Meta tags para PWA em iOS -->
+    <!-- Meta tags para PWA em iOS (Atualizado para evitar warning) -->
     <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes"> 
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Corridas App">
     
@@ -20,15 +21,11 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    <!-- O Babel é essencial para compilar o JSX em tempo real no navegador -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
-    <!-- Tentativa de carregar Lucide (Para ter os ícones reais) -->
-    <!-- Se esta importação falhar por CORS/MIME-type no Render, o aplicativo usará Placeholders. -->
-    <script type="module">
-        import * as Lucide from 'https://unpkg.com/lucide@latest/dist/esm/lucide.js';
-        window.lucide = Lucide;
-    </script>
+    <!-- NOVO: Carregamento do Lucide (Versão UMD) para evitar o erro de 'import declaration' -->
+    <!-- Esta versão se injeta no objeto global 'lucide' -->
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
     
 </head>
 <body class="bg-gray-50">
@@ -38,42 +35,43 @@
         const { useState, useEffect, useMemo, useCallback } = React;
         
         // --- 1. CONFIGURAÇÃO DE ÍCONES ROBUSTA ---
-        // Se o <script type="module"> falhar ao carregar Lucide, esta função garante que o JSX não trave.
+        
+        // Ícone de substituição (Fallback)
         const PlaceholderIcon = ({ className = 'w-5 h-5', color = 'text-gray-500' }) => (
             <svg className={className + ' ' + color} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10"></circle>
+                <rect x="3" y="3" width="18" height="18" rx="2"></rect>
             </svg>
         );
 
         // Lista de ícones esperados
         const iconNames = ['Clock', 'DollarSign', 'BarChart2', 'TrendingUp', 'TrendingDown', 'RefreshCw', 'Loader2', 'User', 'Gauge', 'Fuel', 'Car', 'Coffee', 'Sparkles'];
         
-        // Cria um objeto de ícones com Placeholders por padrão
+        // 1. Inicializa o objeto de ícones com Placeholders por padrão
         const icons = iconNames.reduce((acc, name) => ({ ...acc, [name]: PlaceholderIcon }), {});
         
-        // Se o Lucide foi carregado com sucesso, substitui os Placeholders
-        if (window.lucide) {
-             Object.assign(icons, window.lucide);
-        }
+        // 2. Tenta carregar os ícones do objeto global 'lucide' (injetado pela UMD)
+        // Acessamos window.lucide de forma segura.
+        const lucideComponents = window.lucide || {};
         
+        Object.keys(icons).forEach(name => {
+            const PotentialIcon = lucideComponents[name];
+            // Verifica se o componente é de fato uma função antes de atribuir
+            if (typeof PotentialIcon === 'function') {
+                icons[name] = PotentialIcon;
+            }
+        });
+        
+        // 3. Desestrutura as variáveis que agora contêm CERTEZA de serem funções/componentes válidos
         const { Clock, DollarSign, BarChart2, TrendingUp, TrendingDown, RefreshCw, Loader2, User, Gauge, Fuel, Car, Coffee, Sparkles } = icons;
         // ------------------------------------------
 
         // --- INICIALIZAÇÃO DO FIREBASE (Configurações simuladas) ---
-        // Em um ambiente real, você deve obter essas dependências separadamente.
         const initializeApp = (config) => ({ /* mock app */ });
         const getAuth = (app) => ({ /* mock auth */ });
         const getFirestore = (app) => ({ /* mock firestore */ });
-        // Funções Firestore (mocks simplificados)
         const collection = (db, path) => ({ db, path });
         const onSnapshot = (q, callback, errorCallback) => {
-            // Este é um mock. A funcionalidade do Firebase (onSnapshot) está inativa no Babel. 
-            // Para fazê-lo funcionar de verdade, você precisará importar as libs do Firebase
-            // usando o mesmo método de importação de módulos que o Canvas usa internamente, 
-            // ou injetá-las no escopo global.
-            console.error("AVISO: A funcionalidade do Firebase (onSnapshot) está inativa neste ambiente de arquivo único.");
-            
-            // Retorna um unsubscribe mock
+            console.error("AVISO: A funcionalidade do Firebase (onSnapshot) está inativa neste ambiente de arquivo único. Dados simulados estão sendo usados.");
             return () => console.log("Firebase mock unsubscribed.");
         };
         const doc = (db, path, id) => ({ db, path, id });
@@ -86,8 +84,6 @@
             return () => {};
         };
         
-        // As constantes globais devem ser definidas no escopo global do script, 
-        // ou substituídas por valores reais no Render (Variáveis de Ambiente)
         const firebaseConfig = { apiKey: "mock-key", authDomain: "mock.firebaseapp.com", projectId: "mock-project" };
         const appId = 'daily_runs_tracker';
         const initialAuthToken = null;
@@ -116,7 +112,8 @@
           <div className="bg-white p-4 shadow-lg rounded-xl flex flex-col justify-between transition-all duration-300 hover:shadow-xl border border-gray-100">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold text-gray-500 truncate">{title}</h3>
-              {Icon && <Icon className={`w-5 h-5 ${color} opacity-80`} />}
+              {/* O Ícone é garantido como função (Icon) ou PlaceholderIcon, resolvendo o erro original */}
+              {Icon && <Icon className={`w-5 h-5 ${color} opacity-80`} />} 
             </div>
             <p className="mt-1 text-2xl font-bold text-gray-900">
               {formatNumber(value)}
@@ -127,8 +124,12 @@
 
         const App = () => {
           const [inputs, setInputs] = useState(initialInputs);
-          const [records, setRecords] = useState([]);
-          const [loading, setLoading] = useState(true);
+          // Dados simulados para garantir que o componente Histórico carregue mesmo sem Firebase
+          const [records, setRecords] = useState([
+              { id: '2024-05-15', date: '2024-05-15', saldo: 500, despesas: 150, corridas: 30, horas: 10, km: 250, dailyProfit: 350, aluguel: 50, gasolina: 80, refeicao: 20, outros: 0, profitPerHour: 35, profitPerKm: 1.4, grossPerKm: 2.0, costPerKm: 0.6 },
+              { id: '2024-05-14', date: '2024-05-14', saldo: 400, despesas: 120, corridas: 25, horas: 8, km: 200, dailyProfit: 280, aluguel: 50, gasolina: 50, refeicao: 20, outros: 0, profitPerHour: 35, profitPerKm: 1.4, grossPerKm: 2.0, costPerKm: 0.6 },
+          ]); 
+          const [loading, setLoading] = useState(false); // Mudado para false para garantir a montagem
           const [saving, setSaving] = useState(false);
           const [error, setError] = useState(null);
           
@@ -146,14 +147,14 @@
 
           // --- 1. Inicialização do Firebase e Autenticação (Adaptado para PWA) ---
           useEffect(() => {
+            // Este bloco ainda está aqui para o caso de você rodar o código em um ambiente que injete o Firebase
             if (Object.keys(firebaseConfig).length === 0) {
               setLoading(false);
+              setUserId('mock-user-default');
               return;
             }
 
             try {
-              // Nesta implementação de arquivo único, as referências do Firebase estão simuladas.
-              // O código precisa de importações explícitas no escopo global para o Firebase funcionar
               const app = initializeApp(firebaseConfig);
               const firestore = getFirestore(app);
               const firebaseAuth = getAuth(app);
@@ -165,14 +166,9 @@
                   setUserId(user.uid);
                   setLoading(false);
                 } else {
+                  // Fallback para usuário anônimo
                   try {
-                    if (initialAuthToken) {
-                      const userCredential = await signInWithCustomToken(firebaseAuth, initialAuthToken);
-                      setUserId(userCredential.user.uid);
-                    } else {
-                      const userCredential = await signInAnonymously(firebaseAuth);
-                      setUserId(userCredential.user.uid);
-                    }
+                    await signInAnonymously(firebaseAuth);
                   } catch (e) {
                     setUserId(crypto.randomUUID()); 
                   } finally {
@@ -183,31 +179,31 @@
               return () => unsubscribe();
             } catch (e) {
               setError("Erro ao conectar com o banco de dados. (Firebase Mock)");
+              setUserId('mock-user-error');
               setLoading(false);
             }
           }, []);
 
-          // --- 2. Busca de Dados em Tempo Real (Simulado para PWA/Render) ---
+          // --- 2. Busca de Dados em Tempo Real (Simulado) ---
           useEffect(() => {
             if (!db || !userId) return;
 
             const collectionPath = `artifacts/${appId}/users/${userId}/daily_runs`;
             const q = collection(db, collectionPath);
             
-            // Simulação de dados para visualização, pois o onSnapshot não funciona no escopo Babel/global sem imports específicos.
-            const mockRecords = [
-                { id: '2024-05-15', date: '2024-05-15', saldo: 500, despesas: 150, corridas: 30, horas: 10, km: 250, dailyProfit: 350, aluguel: 50, gasolina: 80, refeicao: 20, outros: 0, profitPerHour: 35, profitPerKm: 1.4, grossPerKm: 2.0, costPerKm: 0.6 },
-                { id: '2024-05-14', date: '2024-05-14', saldo: 400, despesas: 120, corridas: 25, horas: 8, km: 200, dailyProfit: 280, aluguel: 50, gasolina: 50, refeicao: 20, outros: 0, profitPerHour: 35, profitPerKm: 1.4, grossPerKm: 2.0, costPerKm: 0.6 },
-            ];
+            // Simulação de onSnapshot. Em um ambiente real, substitua pelos dados reais.
+            // Apenas para mostrar o funcionamento da UI.
+            setLoading(true); 
+            setTimeout(() => {
+                 const mockRecords = [
+                    { id: '2024-05-15', date: '2024-05-15', saldo: 500, despesas: 150, corridas: 30, horas: 10, km: 250, dailyProfit: 350, aluguel: 50, gasolina: 80, refeicao: 20, outros: 0, profitPerHour: 35, profitPerKm: 1.4, grossPerKm: 2.0, costPerKm: 0.6 },
+                    { id: '2024-05-14', date: '2024-05-14', saldo: 400, despesas: 120, corridas: 25, horas: 8, km: 200, dailyProfit: 280, aluguel: 50, gasolina: 50, refeicao: 20, outros: 0, profitPerHour: 35, profitPerKm: 1.4, grossPerKm: 2.0, costPerKm: 0.6 },
+                ];
+                setRecords(mockRecords);
+                setLoading(false);
+            }, 500);
 
-            // Em um ambiente real, você usaria o onSnapshot
-            // const unsubscribe = onSnapshot(q, (snapshot) => { ... })
-            
-            setRecords(mockRecords);
-            setLoading(false);
-
-            return () => { /* unsubscribe */ };
-          }, [db, userId]);
+          }, [db, userId]); // Dependências do Firebase/Usuário
 
           const handleChange = (e) => {
             const { name, value } = e.target;
@@ -741,12 +737,14 @@ Custos Médios Diários Detalhados (Baseado em ${monthData.count} dias de regist
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
+                // Adiciona um listener para Service Worker para tentar registrar o sw.js
+                // Mesmo se o arquivo sw.js não existir (404), o app principal deve funcionar.
                 navigator.serviceWorker.register('/sw.js')
                     .then(registration => {
                         console.log('Service Worker registrado com sucesso:', registration.scope);
                     })
                     .catch(error => {
-                        console.error('Falha no registro do Service Worker:', error);
+                        console.error('Falha no registro do Service Worker (Normal se não houver sw.js):', error);
                     });
             });
         }
