@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Controle Diário de Corridas</title>
+    
+    <!-- Link para o Web Manifest (Obrigatório para PWA) -->
+    <link rel="manifest" href="/manifest.json">
+    
+    <!-- Meta tags para PWA em iOS -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Corridas App">
+    
+    <!-- Cores do tema e barra de status -->
+    <meta name="theme-color" content="#4f46e5"> 
+
+    <!-- Carrega as dependências necessárias -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Ícones de Lucide (usados pelo React) -->
+    <script type="module">
+        import { Clock, DollarSign, BarChart2, TrendingUp, TrendingDown, RefreshCw, Loader2, User, Gauge, Fuel, Car, Coffee, Sparkles } from 'https://unpkg.com/lucide@latest/dist/esm/lucide.js';
+        window.lucide = { Clock, DollarSign, BarChart2, TrendingUp, TrendingDown, RefreshCw, Loader2, User, Gauge, Fuel, Car, Coffee, Sparkles };
+    </script>
+    
+</head>
+<body class="bg-gray-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useCallback } = React;
+        const { Clock, DollarSign, BarChart2, TrendingUp, TrendingDown, RefreshCw, Loader2, User, Gauge, Fuel, Car, Coffee, Sparkles } = window.lucide || {};
+        
+        // --- INICIALIZAÇÃO DO FIREBASE (Configurações simuladas) ---
+        // Em um ambiente real, você deve obter essas dependências separadamente.
+        const initializeApp = (config) => ({ /* mock app */ });
+        const getAuth = (app) => ({ /* mock auth */ });
+        const getFirestore = (app) => ({ /* mock firestore */ });
+        // Funções Firestore (mocks simplificados)
+        const collection = (db, path) => ({ db, path });
+        const onSnapshot = (q, callback, errorCallback) => {
+            // Em uma implantação real, estas dependências seriam importadas de:
+            // "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js", etc.
+            
+            // Este é um mock para evitar erro de referência no Babel.
+            // Para fazê-lo funcionar de verdade, você precisará importar as libs do Firebase (como no App.jsx original)
+            // e garantir que elas estejam no escopo global ou importadas via módulos.
+            console.error("AVISO: A funcionalidade do Firebase (onSnapshot) está inativa no Babel. Precisa de importação module.");
+            
+            // Retorna um unsubscribe mock
+            return () => console.log("Firebase mock unsubscribed.");
+        };
+        const doc = (db, path, id) => ({ db, path, id });
+        const setDoc = (docRef, data) => { console.log("Mock: Salvo no Firestore", data); return Promise.resolve(); };
+        const deleteDoc = (docRef) => { console.log("Mock: Deletado do Firestore"); return Promise.resolve(); };
+        const signInAnonymously = (auth) => Promise.resolve({ user: { uid: 'mock-user-' + Math.random().toString(36).substring(2, 9) } });
+        const signInWithCustomToken = (auth, token) => Promise.resolve({ user: { uid: 'mock-user-token' } });
+        const onAuthStateChanged = (auth, callback) => {
+            callback({ uid: 'mock-auth-id' });
+            return () => {};
+        };
+        
+        // As constantes globais devem ser definidas no escopo global do script, 
+        // ou substituídas por valores reais no Render (Variáveis de Ambiente)
+        const firebaseConfig = { apiKey: "mock-key", authDomain: "mock.firebaseapp.com", projectId: "mock-project" };
+        const appId = 'daily_runs_tracker';
+        const initialAuthToken = null;
+        
+        const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent";
+        const API_KEY = "";
+
+        // Funções utilitárias
+        const formatCurrency = (value) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+        const formatNumber = (value) => parseFloat(value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const safeDiv = (numerator, denominator) => (denominator > 0 ? numerator / denominator : 0);
+
+        const initialInputs = {
+          date: new Date().toISOString().substring(0, 10),
+          saldo: '', 
+          aluguel: '', 
+          gasolina: '', 
+          refeicao: '', 
+          outros: '', 
+          corridas: '', 
+          horas: '', 
+          km: '', 
+        };
+
+        const StatCard = ({ title, value, unit, icon: Icon, color }) => (
+          <div className="bg-white p-4 shadow-lg rounded-xl flex flex-col justify-between transition-all duration-300 hover:shadow-xl border border-gray-100">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-500 truncate">{title}</h3>
+              {Icon && <Icon className={`w-5 h-5 ${color} opacity-80`} />}
+            </div>
+            <p className="mt-1 text-2xl font-bold text-gray-900">
+              {formatNumber(value)}
+              {unit && <span className="text-base font-medium text-gray-500 ml-1">{unit}</span>}
+            </p>
+          </div>
+        );
+
+        const App = () => {
+          const [inputs, setInputs] = useState(initialInputs);
+          const [records, setRecords] = useState([]);
+          const [loading, setLoading] = useState(true);
+          const [saving, setSaving] = useState(false);
+          const [error, setError] = useState(null);
+          
+          const [isEditing, setIsEditing] = useState(false);
+          const [currentRecordId, setCurrentRecordId] = useState(null);
+          const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+
+          const [analysisOutput, setAnalysisOutput] = useState(null);
+          const [isAnalyzing, setIsAnalyzing] = useState(false);
+          const [analysisForMonth, setAnalysisForMonth] = useState(null); 
+
+          const [db, setDb] = useState(null);
+          const [auth, setAuth] = useState(null);
+          const [userId, setUserId] = useState(null);
+
+          // --- 1. Inicialização do Firebase e Autenticação (Adaptado para PWA) ---
+          useEffect(() => {
+            if (Object.keys(firebaseConfig).length === 0) {
+              setLoading(false);
+              return;
+            }
+
+            try {
+              // Nesta implementação de arquivo único, as referências do Firebase estão simuladas.
+              // Para funcionar no Render, estas bibliotecas DEVEM ser importadas via <script type="module"> e as chamadas ajustadas.
+              // O Canvas fornece as dependências, mas em um ambiente externo, você precisa de importações explícitas.
+              const app = initializeApp(firebaseConfig);
+              const firestore = getFirestore(app);
+              const firebaseAuth = getAuth(app);
+              setDb(firestore);
+              setAuth(firebaseAuth);
+
+              const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
+                if (user) {
+                  setUserId(user.uid);
+                  setLoading(false);
+                } else {
+                  try {
+                    if (initialAuthToken) {
+                      const userCredential = await signInWithCustomToken(firebaseAuth, initialAuthToken);
+                      setUserId(userCredential.user.uid);
+                    } else {
+                      const userCredential = await signInAnonymously(firebaseAuth);
+                      setUserId(userCredential.user.uid);
+                    }
+                  } catch (e) {
+                    setUserId(crypto.randomUUID()); 
+                  } finally {
+                    setLoading(false);
+                  }
+                }
+              });
+              return () => unsubscribe();
+            } catch (e) {
+              setError("Erro ao conectar com o banco de dados.");
+              setLoading(false);
+            }
+          }, []);
+
+          // --- 2. Busca de Dados em Tempo Real (Simulado para PWA/Render) ---
+          useEffect(() => {
+            if (!db || !userId) return;
+
+            const collectionPath = `artifacts/${appId}/users/${userId}/daily_runs`;
+            const q = collection(db, collectionPath);
+            
+            // Simulação de dados para visualização, pois o onSnapshot não funciona no escopo Babel/global sem imports específicos.
+            const mockRecords = [
+                { id: '2024-05-15', date: '2024-05-15', saldo: 500, despesas: 150, corridas: 30, horas: 10, km: 250, dailyProfit: 350, aluguel: 50, gasolina: 80, refeicao: 20, outros: 0, profitPerHour: 35, profitPerKm: 1.4, grossPerKm: 2.0, costPerKm: 0.6 },
+                { id: '2024-05-14', date: '2024-05-14', saldo: 400, despesas: 120, corridas: 25, horas: 8, km: 200, dailyProfit: 280, aluguel: 50, gasolina: 50, refeicao: 20, outros: 0, profitPerHour: 35, profitPerKm: 1.4, grossPerKm: 2.0, costPerKm: 0.6 },
+            ];
+
+            // Em um ambiente real, você usaria o onSnapshot
+            // const unsubscribe = onSnapshot(q, (snapshot) => { ... })
+            
+            setRecords(mockRecords);
+            setLoading(false);
+
+            return () => { /* unsubscribe */ };
+          }, [db, userId]);
+
+          const handleChange = (e) => {
+            const { name, value } = e.target;
+            setInputs(prev => ({ ...prev, [name]: value }));
+          };
+
+          const stats = useMemo(() => {
+            const saldo = parseFloat(inputs.saldo) || 0;
+            const aluguel = parseFloat(inputs.aluguel) || 0;
+            const gasolina = parseFloat(inputs.gasolina) || 0;
+            const refeicao = parseFloat(inputs.refeicao) || 0;
+            const outros = parseFloat(inputs.outros) || 0;
+            const despesas = aluguel + gasolina + refeicao + outros;
+
+            const corridas = parseInt(inputs.corridas) || 0;
+            const horas = parseFloat(inputs.horas) || 0;
+            const km = parseFloat(inputs.km) || 0;
+
+            const dailyProfit = saldo - despesas;
+
+            return {
+              dailyProfit, 
+              despesas, 
+              grossPerTrip: safeDiv(saldo, corridas),
+              grossPerHour: safeDiv(saldo, horas),
+              grossPerKm: safeDiv(saldo, km),
+              costPerTrip: safeDiv(despesas, corridas),
+              costPerHour: safeDiv(despesas, horas),
+              costPerKm: safeDiv(despesas, km),
+              profitPerTrip: safeDiv(dailyProfit, corridas),
+              profitPerHour: safeDiv(dailyProfit, horas),
+              profitPerKm: safeDiv(dailyProfit, km),
+            };
+          }, [inputs]);
+
+          const saveRecord = useCallback(async () => {
+            if (!db || !userId || saving) return;
+
+            const { date, saldo, aluguel, gasolina, refeicao, outros, corridas, horas, km } = inputs;
+            
+            if (!date || !saldo || !corridas || !horas || !km) {
+                setError("Por favor, preencha a Data, Saldo, Nº Corridas, Horas e KM.");
+                return;
+            }
+
+            setSaving(true);
+            setError(null);
+
+            const despesasTotal = (parseFloat(aluguel) || 0) + (parseFloat(gasolina) || 0) + (parseFloat(refeicao) || 0) + (parseFloat(outros) || 0);
+
+            const recordData = {
+              date,
+              saldo: parseFloat(saldo),
+              despesas: despesasTotal, 
+              corridas: parseInt(corridas),
+              horas: parseFloat(horas),
+              km: parseFloat(km),
+              aluguel: parseFloat(aluguel) || 0,
+              gasolina: parseFloat(gasolina) || 0,
+              refeicao: parseFloat(refeicao) || 0,
+              outros: parseFloat(outros) || 0,
+              ...stats, 
+              createdAt: new Date().toISOString(),
+              userId,
+            };
+
+            try {
+              const docId = currentRecordId || date; 
+              const docRef = doc(db, `artifacts/${appId}/users/${userId}/daily_runs`, docId);
+              await setDoc(docRef, recordData);
+              
+              setInputs(initialInputs);
+              setCurrentRecordId(null);
+              setIsEditing(false);
+              setAnalysisOutput(null);
+
+            } catch (e) {
+              setError("Erro ao salvar o registro. Verifique a conexão.");
+            } finally {
+              setSaving(false);
+            }
+          }, [inputs, stats, db, userId, saving, currentRecordId]);
+
+          const handleDelete = useCallback(async (recordId) => {
+            if (!db || !userId) return;
+            
+            setDeleteConfirmId(null); 
+            setError(null);
+
+            try {
+              const docRef = doc(db, `artifacts/${appId}/users/${userId}/daily_runs`, recordId);
+              await deleteDoc(docRef);
+              setAnalysisOutput(null); 
+            } catch (e) {
+              setError("Erro ao excluir o registro. Tente novamente.");
+            }
+          }, [db, userId]); 
+
+          const handleEdit = useCallback((record) => {
+            setInputs({
+              date: record.date,
+              saldo: String(record.saldo || ''), 
+              aluguel: String(record.aluguel || ''),
+              gasolina: String(record.gasolina || ''),
+              refeicao: String(record.refeicao || ''),
+              outros: String(record.outros || ''),
+              corridas: String(record.corridas || ''),
+              horas: String(record.horas || ''),
+              km: String(record.km || ''),
+            });
+            setCurrentRecordId(record.id);
+            setIsEditing(true);
+            setError(null);
+            setAnalysisOutput(null); 
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }, []);
+
+          const monthlySummary = useMemo(() => {
+            if (records.length === 0) return [];
+            
+            const summary = records.reduce((acc, record) => {
+              const monthYear = record.date.substring(0, 7); 
+              
+              if (!acc[monthYear]) {
+                acc[monthYear] = {
+                  monthYear,
+                  totalProfit: 0, totalKm: 0, totalTrips: 0, totalHours: 0, totalDespesas: 0,
+                  aluguel: 0, gasolina: 0, refeicao: 0, outros: 0, 
+                  count: 0,
+                };
+              }
+              
+              acc[monthYear].totalProfit += parseFloat(record.dailyProfit) || 0;
+              acc[monthYear].totalKm += parseFloat(record.km) || 0;
+              acc[monthYear].totalTrips += parseInt(record.corridas) || 0;
+              acc[monthYear].totalHours += parseFloat(record.horas) || 0;
+              acc[monthYear].totalDespesas += parseFloat(record.despesas) || 0;
+              
+              acc[monthYear].aluguel += parseFloat(record.aluguel) || 0;
+              acc[monthYear].gasolina += parseFloat(record.gasolina) || 0;
+              acc[monthYear].refeicao += parseFloat(record.refeicao) || 0;
+              acc[monthYear].outros += parseFloat(record.outros) || 0;
+
+              acc[monthYear].count += 1;
+              
+              return acc;
+            }, {});
+
+            return Object.values(summary).map(monthData => ({
+              ...monthData,
+              profitPerKm: safeDiv(monthData.totalProfit, monthData.totalKm),
+              profitPerHour: safeDiv(monthData.totalProfit, monthData.totalHours),
+              costPerTrip: safeDiv(monthData.totalDespesas, monthData.totalTrips),
+              avgAluguel: safeDiv(monthData.aluguel, monthData.count),
+              avgGasolina: safeDiv(monthData.gasolina, monthData.count),
+              avgRefeicao: safeDiv(monthData.refeicao, monthData.count),
+              avgOutros: safeDiv(monthData.outros, monthData.count),
+            })).sort((a, b) => b.monthYear.localeCompare(a.monthYear)); 
+          }, [records]);
+
+          const handleAnalyzeCosts = useCallback(async (monthData) => {
+            setIsAnalyzing(true);
+            setAnalysisOutput(null);
+            setAnalysisForMonth(monthData.monthYear);
+            setError(null);
+
+            const systemPrompt = "Você é um consultor financeiro especialista em otimização de custos para motoristas de aplicativo. Forneça uma análise concisa (3 a 4 parágrafos) focada em identificar áreas de alto custo e ofereça 3 dicas práticas e acionáveis para otimizar os lucros sem comprometer o desempenho. Mantenha um tom profissional e direto.";
+
+            const userQuery = `Analise meus dados financeiros agregados para o mês de ${monthData.monthYear}, com foco em custos.
+
+Dados do Mês:
+- Lucro Total: R$${formatNumber(monthData.totalProfit)}
+- Despesas Totais: R$${formatNumber(monthData.totalDespesas)}
+- Quilometragem Total: ${formatNumber(monthData.totalKm)} km
+- Viagens Totais: ${monthData.totalTrips} viagens
+- Horas Trabalhadas: ${formatNumber(monthData.totalHours)} horas
+
+Custos Médios Diários Detalhados (Baseado em ${monthData.count} dias de registro):
+- Custo Médio Diário Aluguel/Financ. (Fixos): R$${formatNumber(monthData.avgAluguel)}
+- Custo Médio Diário Gasolina/Combustível (Variáveis): R$${formatNumber(monthData.avgGasolina)}
+- Custo Médio Diário Refeição: R$${formatNumber(monthData.avgRefeicao)}
+- Custo Médio Diário Outros: R$${formatNumber(monthData.avgOutros)}
+`;
+
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+            };
+
+            const maxRetries = 3;
+            let lastResponse = null;
+
+            for (let attempt = 0; attempt < maxRetries; attempt++) {
+                try {
+                    const response = await fetch(`${GEMINI_API_URL}?key=${API_KEY}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (response.ok) {
+                        const result = await response.json();
+                        const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                        if (text) {
+                            setAnalysisOutput(text);
+                            setIsAnalyzing(false);
+                            return; 
+                        }
+                    }
+                    
+                    if (attempt < maxRetries - 1) {
+                        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+                    } else {
+                        lastResponse = response;
+                        throw new Error("Falha na geração após múltiplas tentativas.");
+                    }
+                } catch (e) {
+                    if (attempt === maxRetries - 1) {
+                        setError(`Erro ao gerar análise. Ocorreu um problema de rede ou no servidor.`);
+                    }
+                }
+            }
+            
+            setIsAnalyzing(false);
+          }, []);
+
+          const MonthlyDashboard = ({ summary }) => {
+            if (!summary || summary.length === 0) return null;
+
+            const getMonthName = (monthYear) => {
+                const date = new Date(`${monthYear}-01T12:00:00Z`);
+                return date.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+            }
+
+            return (
+                <div className="mt-8 bg-indigo-50 p-6 rounded-xl shadow-inner mb-8">
+                    <h2 className="text-2xl font-bold mb-4 text-indigo-700 flex items-center">
+                        {BarChart2 && <BarChart2 className="w-5 h-5 mr-2" />} Resumo Mensal
+                    </h2>
+                    <div className="space-y-6">
+                        {summary.map((month) => {
+                            const monthName = getMonthName(month.monthYear);
+                            const isCurrentAnalysis = analysisForMonth === month.monthYear;
+                            
+                            return (
+                                <div key={month.monthYear} className="p-4 bg-white rounded-lg shadow-md border-l-4 border-indigo-500">
+                                    <h3 className="text-xl font-extrabold text-indigo-600 mb-2 capitalize">{monthName}</h3>
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                                        <div className="p-2 bg-green-50 rounded-md">
+                                            <p className="text-xs text-gray-500">Lucro Total</p>
+                                            <p className="font-bold text-green-700">{formatCurrency(month.totalProfit)}</p>
+                                        </div>
+                                        <div className="p-2 bg-red-50 rounded-md">
+                                            <p className="text-xs text-gray-500">Custo Total</p>
+                                            <p className="font-bold text-red-700">{formatCurrency(month.totalDespesas)}</p>
+                                        </div>
+                                        <div className="p-2 bg-yellow-50 rounded-md">
+                                            <p className="text-xs text-gray-500">KM Total</p>
+                                            <p className="font-bold text-yellow-700">{formatNumber(month.totalKm)} km</p>
+                                        </div>
+                                        <div className="p-2 bg-blue-50 rounded-md">
+                                            <p className="text-xs text-gray-500">Viagens Total</p>
+                                            <p className="font-bold text-blue-700">{month.totalTrips}</p>
+                                        </div>
+                                    </div>
+                                    <div className="mt-3 pt-3 border-t border-gray-100 grid grid-cols-3 gap-3 text-sm">
+                                        <p className="text-gray-600">Lucro Médio/KM: <span className="font-bold text-teal-700">{formatCurrency(month.profitPerKm)}</span></p>
+                                        <p className="text-gray-600">Lucro Médio/Hora: <span className="font-bold text-teal-700">{formatCurrency(month.profitPerHour)}</span></p>
+                                        <p className="text-gray-600">Custo Médio/Viagem: <span className="font-bold text-red-700">{formatCurrency(month.costPerTrip)}</span></p>
+                                    </div>
+                                    
+                                    <div className="mt-4 flex justify-end">
+                                        <button
+                                            onClick={() => handleAnalyzeCosts(month)}
+                                            disabled={isAnalyzing}
+                                            className={`flex items-center justify-center px-4 py-2 font-semibold text-white rounded-lg shadow-md transition duration-150 text-sm ${
+                                                isAnalyzing && isCurrentAnalysis
+                                                    ? 'bg-purple-400 cursor-wait'
+                                                    : 'bg-purple-600 hover:bg-purple-700 active:bg-purple-800'
+                                            }`}
+                                        >
+                                            {isAnalyzing && isCurrentAnalysis ? (
+                                                <>
+                                                    {Loader2 && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Analisando...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    {Sparkles && <Sparkles className="w-4 h-4 mr-2" />} Análise de Custos ✨
+                                                </>
+                                            )}
+                                        </button>
+                                    </div>
+
+                                    {isCurrentAnalysis && analysisOutput && (
+                                        <div className="mt-4 p-4 bg-purple-50 border border-purple-300 rounded-lg whitespace-pre-line text-sm text-gray-800">
+                                            <p className="font-bold text-purple-700 mb-2">Relatório do Consultor Gemini para {monthName}:</p>
+                                            {analysisOutput}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+          };
+
+          const HistoricalRecords = ({ records, handleEdit, handleDelete, isEditing, deleteConfirmId, setDeleteConfirmId }) => (
+            <div className="mt-8 bg-white p-6 rounded-xl shadow-lg">
+              <h2 className="text-2xl font-bold mb-4 text-gray-700 flex items-center">
+                {Clock && <Clock className="w-5 h-5 mr-2" />} Histórico Diário ({records.length})
+              </h2>
+              <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
+                {records.map((r) => (
+                  <div key={r.id} className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+                    <p className="font-bold text-lg text-indigo-600 mb-2">{new Date(r.date).toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'short', year: 'numeric' })}</p>
+                    <div className="grid grid-cols-2 text-sm mt-1 gap-1">
+                        <span className="text-gray-600">Total Ganho:</span>
+                        <span className="font-semibold text-gray-800">{formatCurrency(r.saldo)}</span>
+                        <span className="text-gray-600">Total Despesas:</span>
+                        <span className="font-semibold text-gray-800">{formatCurrency(r.despesas)}</span>
+                        <span className="text-gray-600">Lucro Diário:</span>
+                        <span className={`font-semibold ${r.dailyProfit >= 0 ? 'text-green-700' : 'text-red-700'}`}>{formatCurrency(r.dailyProfit)}</span>
+                        <span className="text-gray-600">KM / Corridas:</span>
+                        <span className="font-semibold text-gray-800">{r.km} km / {r.corridas} viagens</span>
+                    </div>
+                    
+                    {deleteConfirmId === r.id ? (
+                        <div className="mt-3 p-2 bg-red-100 rounded-md flex justify-between items-center">
+                            <span className="text-sm text-red-800 font-semibold">Confirmar exclusão?</span>
+                            <div>
+                                <button 
+                                    onClick={() => handleDelete(r.id)} 
+                                    className="text-white bg-red-600 hover:bg-red-700 text-xs py-1 px-2 rounded-lg mr-2 transition"
+                                >
+                                    Sim, Excluir
+                                </button>
+                                <button 
+                                    onClick={() => setDeleteConfirmId(null)} 
+                                    className="text-red-600 bg-white hover:bg-gray-200 text-xs py-1 px-2 rounded-lg transition"
+                                >
+                                    Cancelar
+                                </button>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="mt-3 flex space-x-2 border-t pt-2 border-gray-200">
+                            <button 
+                                onClick={() => handleEdit(r)} 
+                                disabled={isEditing}
+                                className={`text-indigo-600 hover:text-indigo-800 bg-indigo-100 text-xs py-1 px-3 rounded-full font-medium transition ${isEditing ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            >
+                                Editar
+                            </button>
+                            <button 
+                                onClick={() => setDeleteConfirmId(r.id)} 
+                                disabled={isEditing}
+                                className={`text-red-600 hover:text-red-800 bg-red-100 text-xs py-1 px-3 rounded-full font-medium transition ${isEditing ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            >
+                                Excluir
+                            </button>
+                        </div>
+                    )}
+                  </div>
+                ))}
+                {records.length === 0 && <p className="text-center text-gray-500 py-4">Nenhum registro encontrado. Salve seu primeiro dia!</p>}
+              </div>
+            </div>
+          );
+
+          const Input = ({ label, name, value, onChange, type, placeholder, disabled, icon: Icon }) => (
+            <div className="relative">
+              <label htmlFor={name} className="block text-sm font-medium text-gray-700">
+                {label}
+              </label>
+              <div className="relative">
+                  {Icon && <Icon className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400"/>}
+                  <input
+                      id={name}
+                      name={name}
+                      type={type}
+                      value={value}
+                      onChange={onChange}
+                      step={type === 'number' ? '0.01' : '1'}
+                      placeholder={placeholder}
+                      disabled={disabled}
+                      className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm transition duration-150 ${disabled ? 'bg-gray-100' : 'bg-white'} ${Icon ? 'pl-9' : 'pl-3'}`}
+                  />
+              </div>
+            </div>
+          );
+
+          return (
+            <div className="min-h-screen bg-gray-50 p-4 sm:p-8 font-sans">
+              <div className="max-w-4xl mx-auto">
+                <header className="text-center mb-8">
+                  <h1 className="text-4xl font-extrabold text-indigo-700 tracking-tight">
+                    Controle Diário de Corridas
+                  </h1>
+                  <p className="text-gray-500 mt-2">
+                    Insira os dados do dia para calcular o Lucro e Estatísticas.
+                  </p>
+                </header>
+
+                <div className="text-sm text-gray-500 mb-4 bg-white p-3 rounded-lg shadow-sm flex items-center justify-between">
+                  <span className="flex items-center">
+                     {User && <User className="w-4 h-4 mr-2"/>}
+                     ID do Usuário: <span className="font-mono text-xs ml-2 text-indigo-600 truncate">{userId || 'Carregando...'}</span>
+                  </span>
+                  {loading && RefreshCw && <RefreshCw className="w-4 h-4 animate-spin text-indigo-500"/>}
+                </div>
+
+                <div className="bg-white p-6 rounded-xl shadow-2xl mb-8">
+                  <h2 className="text-xl font-bold mb-4 text-gray-700">{isEditing ? 'Editar Registro' : 'Dados do Dia'}</h2>
+                  
+                  <div className="mb-6 border-b pb-4 border-indigo-100">
+                     <h3 className="text-lg font-semibold text-indigo-600 mb-3 flex items-center">{DollarSign && <DollarSign className="w-5 h-5 mr-2"/>} Ganhos e Indicadores de Trabalho</h3>
+                     <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                      <Input label="Data" type="date" name="date" value={inputs.date} onChange={handleChange} disabled={saving || isEditing} />
+                      <Input label="Total Ganho (R$)" type="number" name="saldo" value={inputs.saldo} onChange={handleChange} placeholder="550.00" disabled={saving} />
+                      <Input label="Nº Corridas" type="number" name="corridas" value={inputs.corridas} onChange={handleChange} placeholder="35" disabled={saving} />
+                      <Input label="Horas Trab." type="number" name="horas" value={inputs.horas} onChange={handleChange} placeholder="8.5" disabled={saving} />
+                      <Input label="KM Rodados" type="number" name="km" value={inputs.km} onChange={handleChange} placeholder="180.5" disabled={saving} />
+                    </div>
+                  </div>
+
+                  <div className="mb-6">
+                     <h3 className="text-lg font-semibold text-red-600 mb-3 flex items-center">{TrendingDown && <TrendingDown className="w-5 h-5 mr-2"/>} Despesas Detalhadas</h3>
+                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <Input label="Aluguel/Financ. (R$)" type="number" name="aluguel" value={inputs.aluguel} onChange={handleChange} placeholder="50.00" icon={Car} disabled={saving} />
+                      <Input label="Gasolina/Comb. (R$)" type="number" name="gasolina" value={inputs.gasolina} onChange={handleChange} placeholder="40.00" icon={Fuel} disabled={saving} />
+                      <Input label="Refeição (R$)" type="number" name="refeicao" value={inputs.refeicao} onChange={handleChange} placeholder="20.00" icon={Coffee} disabled={saving} />
+                      <Input label="Outros (R$)" type="number" name="outros" value={inputs.outros} onChange={handleChange} placeholder="10.00" icon={Gauge} disabled={saving} />
+                    </div>
+                    <div className="mt-4 text-right">
+                        <span className="text-md font-semibold text-gray-700">Total Despesas: </span>
+                        <span className="text-xl font-bold text-red-700">{formatCurrency(stats.despesas)}</span>
+                    </div>
+                  </div>
+                  
+                  <div className="mt-6 flex justify-between items-center">
+                    {isEditing && (
+                        <button
+                            onClick={() => { setInputs(initialInputs); setCurrentRecordId(null); setIsEditing(false); }}
+                            className="flex items-center justify-center px-4 py-3 font-semibold text-gray-700 bg-gray-200 rounded-lg shadow-md transition duration-150 hover:bg-gray-300"
+                        >
+                            Cancelar Edição
+                        </button>
+                    )}
+                    <button
+                      onClick={saveRecord}
+                      disabled={saving || loading || !userId}
+                      className={`flex items-center justify-center px-6 py-3 font-semibold text-white rounded-lg shadow-md transition duration-150 ${
+                        saving || loading || !userId
+                          ? 'bg-gray-400 cursor-not-allowed'
+                          : 'bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 ml-auto'
+                      }`}
+                    >
+                      {saving ? (
+                        <>
+                          {Loader2 && <Loader2 className="w-5 h-5 mr-2 animate-spin" />} Salvando...
+                        </>
+                      ) : isEditing ? (
+                        <>
+                           {RefreshCw && <RefreshCw className="w-5 h-5 mr-2" />} Atualizar Registro
+                        </>
+                      ) : (
+                        <>
+                          {BarChart2 && <BarChart2 className="w-5 h-5 mr-2" />} Salvar Registro Diário
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  {error && <p className="mt-4 text-red-600 bg-red-100 p-3 rounded-lg border border-red-300">{error}</p>}
+                </div>
+
+                <div className="bg-gray-100 p-6 rounded-xl shadow-inner mb-8">
+                    <h2 className="text-2xl font-bold mb-4 text-gray-700">Estatísticas do Dia</h2>
+                    
+                    <div className={`p-4 rounded-xl shadow-xl mb-6 text-center ${stats.dailyProfit >= 0 ? 'bg-green-100 border-green-400' : 'bg-red-100 border-red-400'} border-2`}>
+                        <p className="text-lg font-semibold text-gray-700">Lucro Líquido do Dia (Saldo - Despesas)</p>
+                        <p className={`text-5xl font-extrabold mt-1 ${stats.dailyProfit >= 0 ? 'text-green-800' : 'text-red-800'}`}>
+                            {formatCurrency(stats.dailyProfit)}
+                        </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <h3 className="col-span-full font-bold text-lg text-indigo-600 mt-2 mb-1 border-b border-indigo-200">Faturamento Bruto</h3>
+                        <StatCard title="Faturamento por Viagem" value={stats.grossPerTrip} unit="/ Viagem" icon={DollarSign} color="text-green-500" />
+                        <StatCard title="Faturamento por Hora" value={stats.grossPerHour} unit="/ Hora" icon={DollarSign} color="text-green-500" />
+                        <StatCard title="Faturamento por KM" value={stats.grossPerKm} unit="/ KM" icon={DollarSign} color="text-green-500" />
+                        
+                        <h3 className="col-span-full font-bold text-lg text-red-600 mt-4 mb-1 border-b border-red-200">Custos</h3>
+                        <StatCard title="Custo por Viagem" value={stats.costPerTrip} unit="/ Viagem" icon={TrendingDown} color="text-red-500" />
+                        <StatCard title="Custo por Hora" value={stats.costPerHour} unit="/ Hora" icon={TrendingDown} color="text-red-500" />
+                        <StatCard title="Custo por KM" value={stats.costPerKm} unit="/ KM" icon={TrendingDown} color="text-red-500" />
+
+                        <h3 className="col-span-full font-bold text-lg text-teal-600 mt-4 mb-1 border-b border-teal-200">Lucro Líquido</h3>
+                        <StatCard title="Lucro por Viagem" value={stats.profitPerTrip} unit="/ Viagem" icon={TrendingUp} color="text-teal-500" />
+                        <StatCard title="Lucro por Hora" value={stats.profitPerHour} unit="/ Hora" icon={TrendingUp} color="text-teal-500" />
+                        <StatCard title="Lucro por KM" value={stats.profitPerKm} unit="/ KM" icon={TrendingUp} color="text-teal-500" />
+                    </div>
+                </div>
+                
+                <MonthlyDashboard summary={monthlySummary} />
+
+                {loading ? (
+                  <div className="text-center py-8 text-gray-500 flex justify-center items-center">
+                    {Loader2 && <Loader2 className="w-6 h-6 mr-2 animate-spin" />} Carregando Histórico...
+                  </div>
+                ) : (
+                  <HistoricalRecords 
+                    records={records} 
+                    handleEdit={handleEdit} 
+                    handleDelete={handleDelete} 
+                    isEditing={isEditing}
+                    deleteConfirmId={deleteConfirmId}
+                    setDeleteConfirmId={setDeleteConfirmId}
+                  />
+                )}
+              </div>
+            </div>
+          );
+        };
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+    </script>
+    
+    <!-- Script de Registro do Service Worker -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js')
+                    .then(registration => {
+                        console.log('Service Worker registrado com sucesso:', registration.scope);
+                    })
+                    .catch(error => {
+                        console.error('Falha no registro do Service Worker:', error);
+                    });
+            });
+        }
+    </script>
+</body>
+</html>
