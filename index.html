@@ -20,12 +20,14 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- O Babel é essencial para compilar o JSX em tempo real no navegador -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
-    <!-- Ícones de Lucide (usados pelo React) -->
+    <!-- Tentativa de carregar Lucide (Para ter os ícones reais) -->
+    <!-- Se esta importação falhar por CORS/MIME-type no Render, o aplicativo usará Placeholders. -->
     <script type="module">
-        import { Clock, DollarSign, BarChart2, TrendingUp, TrendingDown, RefreshCw, Loader2, User, Gauge, Fuel, Car, Coffee, Sparkles } from 'https://unpkg.com/lucide@latest/dist/esm/lucide.js';
-        window.lucide = { Clock, DollarSign, BarChart2, TrendingUp, TrendingDown, RefreshCw, Loader2, User, Gauge, Fuel, Car, Coffee, Sparkles };
+        import * as Lucide from 'https://unpkg.com/lucide@latest/dist/esm/lucide.js';
+        window.lucide = Lucide;
     </script>
     
 </head>
@@ -34,8 +36,29 @@
 
     <script type="text/babel">
         const { useState, useEffect, useMemo, useCallback } = React;
-        const { Clock, DollarSign, BarChart2, TrendingUp, TrendingDown, RefreshCw, Loader2, User, Gauge, Fuel, Car, Coffee, Sparkles } = window.lucide || {};
         
+        // --- 1. CONFIGURAÇÃO DE ÍCONES ROBUSTA ---
+        // Se o <script type="module"> falhar ao carregar Lucide, esta função garante que o JSX não trave.
+        const PlaceholderIcon = ({ className = 'w-5 h-5', color = 'text-gray-500' }) => (
+            <svg className={className + ' ' + color} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10"></circle>
+            </svg>
+        );
+
+        // Lista de ícones esperados
+        const iconNames = ['Clock', 'DollarSign', 'BarChart2', 'TrendingUp', 'TrendingDown', 'RefreshCw', 'Loader2', 'User', 'Gauge', 'Fuel', 'Car', 'Coffee', 'Sparkles'];
+        
+        // Cria um objeto de ícones com Placeholders por padrão
+        const icons = iconNames.reduce((acc, name) => ({ ...acc, [name]: PlaceholderIcon }), {});
+        
+        // Se o Lucide foi carregado com sucesso, substitui os Placeholders
+        if (window.lucide) {
+             Object.assign(icons, window.lucide);
+        }
+        
+        const { Clock, DollarSign, BarChart2, TrendingUp, TrendingDown, RefreshCw, Loader2, User, Gauge, Fuel, Car, Coffee, Sparkles } = icons;
+        // ------------------------------------------
+
         // --- INICIALIZAÇÃO DO FIREBASE (Configurações simuladas) ---
         // Em um ambiente real, você deve obter essas dependências separadamente.
         const initializeApp = (config) => ({ /* mock app */ });
@@ -44,13 +67,11 @@
         // Funções Firestore (mocks simplificados)
         const collection = (db, path) => ({ db, path });
         const onSnapshot = (q, callback, errorCallback) => {
-            // Em uma implantação real, estas dependências seriam importadas de:
-            // "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js", etc.
-            
-            // Este é um mock para evitar erro de referência no Babel.
-            // Para fazê-lo funcionar de verdade, você precisará importar as libs do Firebase (como no App.jsx original)
-            // e garantir que elas estejam no escopo global ou importadas via módulos.
-            console.error("AVISO: A funcionalidade do Firebase (onSnapshot) está inativa no Babel. Precisa de importação module.");
+            // Este é um mock. A funcionalidade do Firebase (onSnapshot) está inativa no Babel. 
+            // Para fazê-lo funcionar de verdade, você precisará importar as libs do Firebase
+            // usando o mesmo método de importação de módulos que o Canvas usa internamente, 
+            // ou injetá-las no escopo global.
+            console.error("AVISO: A funcionalidade do Firebase (onSnapshot) está inativa neste ambiente de arquivo único.");
             
             // Retorna um unsubscribe mock
             return () => console.log("Firebase mock unsubscribed.");
@@ -132,8 +153,7 @@
 
             try {
               // Nesta implementação de arquivo único, as referências do Firebase estão simuladas.
-              // Para funcionar no Render, estas bibliotecas DEVEM ser importadas via <script type="module"> e as chamadas ajustadas.
-              // O Canvas fornece as dependências, mas em um ambiente externo, você precisa de importações explícitas.
+              // O código precisa de importações explícitas no escopo global para o Firebase funcionar
               const app = initializeApp(firebaseConfig);
               const firestore = getFirestore(app);
               const firebaseAuth = getAuth(app);
@@ -162,7 +182,7 @@
               });
               return () => unsubscribe();
             } catch (e) {
-              setError("Erro ao conectar com o banco de dados.");
+              setError("Erro ao conectar com o banco de dados. (Firebase Mock)");
               setLoading(false);
             }
           }, []);
